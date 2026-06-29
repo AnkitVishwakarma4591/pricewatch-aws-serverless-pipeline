@@ -1,0 +1,6 @@
+[
+  {
+    "Id": "pricewatch-target",
+    "Arn": "arn:aws:lambda:ap-southeast-2:<YOUR_ACCOUNT_ID>:function:pricewatch-fetcher:prod"
+  }
+]

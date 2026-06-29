@@ -1,0 +1,8 @@
+{
+  "Variables": {
+    "DYNAMODB_TABLE": "crypto-prices",
+    "SNS_TOPIC_ARN": "arn:aws:sns:ap-southeast-2:<YOUR_ACCOUNT_ID>:pricewatch-alerts",
+    "COINS": "bitcoin,ethereum",
+    "PRICE_THRESHOLD_USD": "1000000"
+  }
+}
