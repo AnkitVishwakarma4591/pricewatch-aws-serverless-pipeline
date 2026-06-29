@@ -30,3 +30,4 @@ Thumbs.db
 # Editor files
 .vscode/
 *.swp
+github-deploy-policy.json
