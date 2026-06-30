@@ -1,213 +1,329 @@
-# PriceWatch — Serverless Crypto Price Monitoring Pipeline
+# 🚀 PriceWatch — Serverless Crypto Price Monitoring Pipeline with CI/CD
 
-PriceWatch is a fully automated, serverless data pipeline that fetches live cryptocurrency prices every 15 minutes, validates the data, stores it in a database, and sends an email alert if a price crosses a defined threshold — all without a single server to manage, and without any manual intervention after deployment.
+<p align="center">
+A production-style <b>Serverless Data Pipeline</b> built on AWS that automatically fetches live cryptocurrency prices on a schedule, validates each record, stores price history in Amazon DynamoDB, and sends real-time email alerts via Amazon SNS — fully automated with a CI/CD pipeline powered by GitHub Actions.
+</p>
 
-It was built as a hands-on project to apply real-world data engineering and DevOps concepts: event-driven architecture, data validation, serverless compute, and a versioned, zero-downtime CI/CD deployment pattern.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img src="https://img.shields.io/badge/AWS-Lambda-FF9900?style=for-the-badge&logo=awslambda&logoColor=white">
+  <img src="https://img.shields.io/badge/Amazon-EventBridge-FF4F8B?style=for-the-badge&logo=amazonaws&logoColor=white">
+  <img src="https://img.shields.io/badge/Amazon-DynamoDB-4053D6?style=for-the-badge&logo=amazondynamodb&logoColor=white">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Amazon-SNS-FF4F8B?style=for-the-badge&logo=amazonaws&logoColor=white">
+  <img src="https://img.shields.io/badge/GitHub-Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white">
+  <img src="https://img.shields.io/badge/AWS-IAM-DD344C?style=for-the-badge&logo=amazonaws&logoColor=white">
+</p>
 
 ---
 
-## 1. What problem does this solve?
+## 🏗️ Architecture Overview
 
-Manually checking crypto prices, or running a script on your own laptop to "watch" them, doesn't scale — your laptop has to stay on, and there's no record of price history. PriceWatch solves this by running entirely on AWS infrastructure that is:
+```text
+                    PRICEWATCH SERVERLESS PIPELINE
 
-- **Always on** — runs on a schedule in the cloud, independent of any personal machine
-- **Self-healing on bad data** — if the price API returns something unexpected, the pipeline skips that one record instead of crashing entirely
-- **Auditable** — every price fetch is stored with a timestamp, building a historical record over time
-- **Safely upgradable** — new code can be deployed without any downtime or risk to the live, running version
+                                  GitHub
+                                     │
+                              git push (main)
+                                     ▼
+                          GitHub Actions (CI/CD)
+                       Zip • Deploy • Version • Alias
+                                     │
+                                     ▼
+                            AWS Lambda (prod alias)
+──────────────────────────────────────────────────────────────────────
 
----
-
-## 2. Architecture
-
+      Amazon EventBridge
+      (rate(15 minutes))
+             │
+        triggers
+             ▼
+       AWS Lambda Function
+      (pricewatch-fetcher)
+             │
+      Calls CoinGecko API
+             │
+             ▼
+       Validate each price
+             │
+     ┌───────┴────────┐
+     │                │
+     ▼                ▼
+  Valid Price     Invalid / Threshold
+     │                │
+     ▼                ▼
+Amazon DynamoDB    Amazon SNS
+ (crypto-prices)   (pricewatch-alerts)
+     │                │
+     ▼                ▼
+Amazon CloudWatch    Email Alert
+      Logs
 ```
- ┌──────────────────┐
- │   EventBridge     │   Cron-like rule: fires every 15 minutes
- │  (scheduler)      │
- └─────────┬─────────┘
-           │ triggers
-           ▼
- ┌──────────────────────────────┐        ┌──────────────────────┐
- │   AWS Lambda                  │──────▶ │   CoinGecko API       │
- │   (pricewatch-fetcher:prod)   │ fetch  │   (public, free)      │
- │                                │◀────── │   live USD prices     │
- │   1. Calls CoinGecko API      │
- │   2. Validates each price     │
- │   3. Writes valid rows        │───────▶ ┌──────────────────────┐
- │   4. Publishes alert if       │         │   Amazon DynamoDB     │
- │      threshold crossed or     │         │   (crypto-prices)     │
- │      validation fails         │         └──────────────────────┘
- └───────────────┬────────────────┘
-                 │ publish (on alert / on error)
-                 ▼
- ┌──────────────────────┐
- │   Amazon SNS           │──────▶  Email to subscriber
- │   (pricewatch-alerts)  │
- └──────────────────────┘
+
+---
+
+## Project Overview
+
+This project demonstrates a **Serverless, event-driven data pipeline** built on AWS for monitoring live cryptocurrency prices, with a fully automated CI/CD release process.
+
+### Features
+
+- Scheduled, event-driven ETL using Amazon EventBridge + AWS Lambda
+- Live price data fetched from the public CoinGecko API (no API key required)
+- Per-record data validation before anything is persisted
+- Clean price history stored in Amazon DynamoDB
+- Real-time email alerts via Amazon SNS on threshold breaches or validation failures
+- Zero-downtime deployments using Lambda **versions + aliases**
+- Fully automated deploys via **GitHub Actions** on every push
+- Least-privilege IAM roles, separate for the Lambda runtime and the CI/CD deployer
+
+### Workflow
+
+```text
+EventBridge Schedule (every 15 min)
+      │
+      ▼
+AWS Lambda (pricewatch-fetcher:prod)
+      │
+      ▼
+CoinGecko API (live USD prices)
+      │
+      ▼
+Validate → Clean → Convert to Decimal
+      │
+      ▼
+Amazon DynamoDB (crypto-prices)
+      │
+      ▼
+Amazon SNS → Email (on alert / on error)
+      │
+      ▼
+Amazon CloudWatch Logs
 ```
 
-**Flow in one sentence:** EventBridge wakes Lambda up on a timer → Lambda asks CoinGecko for prices → checks the data is sane → saves it to DynamoDB → emails an alert through SNS only when something noteworthy (a price threshold, or a validation failure) happens.
-
 ---
 
-## 3. Tech stack
+## ETL Workflow
 
-| Layer | Technology | Why |
-|---|---|---|
-| Compute | AWS Lambda (Python 3.12) | Serverless — no servers to patch or pay for when idle |
-| Scheduler | Amazon EventBridge | Cron-like trigger, fully managed |
-| Database | Amazon DynamoDB | Serverless NoSQL, pay-per-request billing, scales automatically |
-| Notifications | Amazon SNS | Pub/sub messaging — one topic, one email subscriber today, can fan out to more channels later |
-| Permissions | AWS IAM | Least-privilege role — Lambda can only touch the exact table, topic, and logs it needs |
-| Data source | CoinGecko public API | Free, no API key required, real live data |
-| Deployment | AWS CLI + Windows Batch script | Reproducible, scriptable deploys from the command line |
-| Language libraries | `boto3` (AWS SDK), `urllib` (HTTP calls), `decimal` (precise price math) | Standard, no extra dependencies to package |
+```mermaid
+flowchart LR
 
----
+A[EventBridge Schedule] --> B[Lambda: pricewatch-fetcher]
+B --> C[CoinGecko API]
 
-## 4. Core concepts explained simply
+C --> D[Validate Price]
 
-If you're new to AWS, here's what each piece actually does — explained without jargon.
+D -->|Valid| E[Write to DynamoDB]
+D -->|Invalid| F[Publish Error Alert]
 
-### AWS Lambda
-Think of Lambda as a function that lives in the cloud and only "wakes up" when something calls it. You don't rent a server 24/7 — you just write a function, and AWS runs it on demand. You pay only for the few seconds it actually executes.
+E --> G{Threshold Crossed?}
+G -->|Yes| H[Publish Price Alert]
+G -->|No| I[Done]
 
-### Amazon EventBridge
-This is essentially a cloud alarm clock. You tell it "ring every 15 minutes," and it calls your Lambda function automatically — no human, no cron job on a personal machine, no laptop that needs to stay switched on.
-
-### Amazon DynamoDB
-A simple, fast, key-based database. Here, every price is saved with two keys: `coin_id` (e.g. "bitcoin") and `timestamp` (when it was fetched). Together they make each row unique, so the table naturally builds a price history over time.
-
-### Amazon SNS (Simple Notification Service)
-Imagine a broadcast list: you publish one message to a "topic," and everyone subscribed to that topic gets a copy — by email, SMS, or another service. Here, one topic (`pricewatch-alerts`) has one email subscriber, but it could be extended to notify a whole team without changing any code.
-
-### IAM Role
-A role is a strict permission slip. The Lambda function here can only: write to the one specific DynamoDB table, publish to the one specific SNS topic, and write its own logs. It cannot touch any other AWS resource in the account — this is the principle of least privilege.
-
-### Data validation layer
-Before any price is saved, it's checked: does the API response actually contain this coin? Does it have a USD price? Is that price a sane positive number? If not, that one coin is skipped and logged as an error — the rest of the pipeline keeps running. This pattern exists because real-world data is never 100% reliable, and a pipeline should never crash entirely over one bad record.
-
-### Lambda versions & aliases (the deployment safety net)
-Every time new code is deployed, it first lands in a draft slot called `$LATEST`. A **version** is a permanent, numbered snapshot of `$LATEST` at a point in time — it never changes once created. An **alias** (here, `prod`) is a movable label that always points to one specific version. EventBridge and all live traffic call the function through the `prod` alias, never `$LATEST` directly. This means deploying new code never risks live traffic — the alias only moves to the new version after it's confirmed published, and if something goes wrong, the alias can be pointed straight back to the previous version.
-
----
-
-## 5. Project structure
-
+F --> J[Amazon SNS]
+H --> J
+J --> K[Email Notification]
 ```
+
+| Stage | Description |
+|--------|-------------|
+| Trigger | Amazon EventBridge invokes the Lambda function every 15 minutes |
+| Extract | Lambda calls the public CoinGecko API for live USD prices |
+| Validate | Each coin's response is checked for presence and a sane positive price |
+| Load | Valid prices are written to DynamoDB with a `coin_id` + `timestamp` key |
+| Alert | Amazon SNS emails a notification if a price threshold is crossed, or if validation fails |
+| Audit | Execution logs are captured in Amazon CloudWatch |
+
+---
+
+## AWS Services Used
+
+| Service | Purpose |
+|----------|---------|
+| AWS Lambda | Runs the fetch → validate → save → alert logic |
+| Amazon EventBridge | Triggers the Lambda function on a 15-minute schedule |
+| Amazon DynamoDB | Stores price history (`crypto-prices` table) |
+| Amazon SNS | Sends email alerts for price thresholds and validation errors |
+| Amazon CloudWatch | Captures Lambda execution logs for debugging and audit |
+| AWS IAM | Least-privilege roles — one for the Lambda runtime, one for CI/CD deploys |
+| GitHub | Source code management |
+| GitHub Actions | Continuous Integration & Continuous Deployment |
+
+---
+
+## Lambda Function
+
+| Function | Role |
+|-----------|------|
+| `pricewatch-fetcher` | Triggered by EventBridge; fetches live prices, validates them, writes to DynamoDB, and publishes SNS alerts when needed |
+
+**Code structure inside the function:**
+
+| File | Responsibility |
+|------|-----------------|
+| `lambda_function.py` | Orchestration — calls the API, loops through coins, writes to DynamoDB, publishes to SNS |
+| `transform.py` | Pure validation/business logic (`validate_price`, `crossed_threshold`) — unit-testable without any AWS dependency |
+
+---
+
+## DynamoDB Table Design
+
+- **Table Name:** `crypto-prices`
+- **Partition Key:** `coin_id` (String)
+- **Sort Key:** `timestamp` (String, ISO 8601)
+- **Capacity Mode:** On-demand (`PAY_PER_REQUEST`)
+- **Additional Fields:** `price_usd` (Decimal), `source_key`
+
+---
+
+## Deployment Strategy — Versions & Aliases
+
+Every deploy publishes a new, permanent, numbered **Lambda version** and then points the `prod` **alias** to it. EventBridge always invokes `pricewatch-fetcher:prod`, never `$LATEST`. This means:
+
+- A bad deploy never touches the live, running version until the alias is explicitly moved
+- Rolling back is a single command: point `prod` back to the previous version number
+- The same pattern is used identically by the local `deploy.bat` script and the GitHub Actions workflow
+
+---
+
+## CI/CD Pipeline
+
+Two ways to deploy, both following the exact same steps:
+
+| Method | Trigger | Use case |
+|--------|---------|----------|
+| `deploy.bat` | Run manually from the command line | Local development, quick iteration |
+| `.github/workflows/deploy.yml` | Automatic on `git push` to `main` (when `lambda/pricewatch/**` changes) | Production-style automated CI/CD |
+
+**Pipeline steps (both methods):**
+```text
+Zip code → Update Lambda code → Wait for update → 
+Publish new version → Point "prod" alias to it → Verify with a test invoke
+```
+
+GitHub Actions authenticates using a dedicated IAM user (`pricewatch-github-deployer`) with permissions scoped to only this one Lambda function, stored as encrypted GitHub repository secrets — never committed to code.
+
+---
+
+## Project Structure
+
+```text
 PriceWatch/
+│
+├── .github/
+│   └── workflows/
+│       └── deploy.yml
+│
 ├── lambda/
 │   └── pricewatch/
-│       ├── lambda_function.py   # Orchestration: fetch API → validate → save → alert
-│       └── transform.py         # Pure validation/business logic, unit-testable
-├── trust-policy.json             # IAM trust policy (lets Lambda assume the role)
-├── permissions-policy.json       # IAM permissions (DynamoDB, SNS, Logs access)
-├── environment.json              # Lambda environment variables
-├── targets.json                  # EventBridge → Lambda target mapping
-├── deploy.bat                    # One-command CI/CD: zip → deploy → version → alias
+│       ├── lambda_function.py
+│       └── transform.py
+│
+├── screenshots/
+│   ├── dynamodb.png
+│   ├── sns-email.png
+│   ├── eventbridge-rule.png
+│   ├── github-actions.png
+│   └── lambda-versions.png
+│
+├── trust-policy.example.json
+├── permissions-policy.example.json
+├── environment.example.json
+├── targets.example.json
+├── deploy.bat
+├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 6. How the pipeline runs, step by step
+## Project Screenshots
 
-1. **EventBridge rule** `pricewatch-schedule` fires every 15 minutes (`rate(15 minutes)`).
-2. It invokes the Lambda function through its `prod` alias (not `$LATEST` — see versioning above).
-3. Inside the function:
-   - `urllib.request` calls the CoinGecko API for the coins listed in the `COINS` environment variable (currently `bitcoin,ethereum`).
-   - For each coin, `transform.validate_price()` checks the response is well-formed before anything is saved.
-   - Valid prices are written to DynamoDB via `boto3`, using `Decimal` (DynamoDB doesn't support native floats).
-   - `transform.crossed_threshold()` checks if the price has crossed `PRICE_THRESHOLD_USD`. If so, an alert is published to SNS.
-   - If any coin fails validation, a separate error alert is published, listing exactly what failed.
-4. SNS delivers any published message to the subscribed email instantly.
+### Amazon EventBridge Rule
+
+Scheduled rule firing every 15 minutes, targeting the `prod` alias of the Lambda function.
+
+<p align="center">
+<img src="https://github.com/AnkitVishwakarma4591/pricewatch-aws-serverless-pipeline/blob/main/ScreenShots/EventBridge%20Rule.png" width="900">
+</p>
 
 ---
 
-## 7. Deployment / CI-CD (`deploy.bat`)
+### AWS Lambda — Versions & Alias
 
-Manually deploying a Lambda update requires multiple steps: zipping the code, uploading it, waiting for AWS to finish processing it, freezing a numbered version, and pointing the live alias to that version. `deploy.bat` automates this entire sequence into a single command:
+Published versions with the `prod` alias pointing to the current live version, demonstrating the zero-downtime deployment pattern.
 
+<p align="center">
+<img src="https://github.com/AnkitVishwakarma4591/pricewatch-aws-serverless-pipeline/blob/main/ScreenShots/Lambda%20Versions%20%26%20Alias.png" width="900">
+</p>
+
+---
+
+### Amazon DynamoDB
+
+Live price history stored in the `crypto-prices` table, with `coin_id` + `timestamp` as the composite key.
+
+<p align="center">
+<img src="https://github.com/AnkitVishwakarma4591/pricewatch-aws-serverless-pipeline/blob/main/ScreenShots/DynamoDB%20Table%20Items.png" width="900">
+</p>
+
+---
+
+### GitHub Actions
+
+Automated CI/CD workflow executing the full deploy sequence — zip, deploy, publish version, update alias, and verify — on every push.
+
+<p align="center">
+<img src="https://github.com/AnkitVishwakarma4591/pricewatch-aws-serverless-pipeline/blob/main/ScreenShots/GitHub%20Actions.png" width="900">
+</p>
+
+---
+
+## Running Locally
+
+Clone the repository:
+
+```bash
+git clone https://github.com/AnkitVishwakarma4591/pricewatch-aws-serverless-pipeline.git
 ```
+
+Move into the project directory:
+
+```bash
+cd pricewatch-aws-serverless-pipeline
+```
+
+Validate the Lambda functions locally:
+
+```bash
+python -m py_compile lambda/pricewatch/lambda_function.py
+python -m py_compile lambda/pricewatch/transform.py
+```
+
+Deploy manually (requires AWS CLI configured):
+
+```bash
 deploy.bat
 ```
 
-What it does, in order:
-1. Deletes any old zip file
-2. Re-zips the `lambda/pricewatch` folder
-3. Uploads the new code via `aws lambda update-function-code`
-4. Waits for AWS to finish applying the update
-5. Publishes a new, permanent numbered version (`aws lambda publish-version`)
-6. Points the `prod` alias to that new version (`aws lambda update-alias`)
-7. Runs a test invoke against `prod` to confirm the deployment works
-
-Because EventBridge always calls the `prod` alias, this script gives a zero-downtime deploy — the live schedule is never interrupted, and a bad deploy can be rolled back by simply pointing the alias back to the previous version number.
-
 ---
 
-## 8. Setting this up from scratch (AWS CLI commands used)
+## 🚀 Future Improvements
 
-```bash
-# 1. DynamoDB table
-aws dynamodb create-table --table-name crypto-prices \
-  --attribute-definitions AttributeName=coin_id,AttributeType=S AttributeName=timestamp,AttributeType=S \
-  --key-schema AttributeName=coin_id,KeyType=HASH AttributeName=timestamp,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST --region ap-southeast-2
-
-# 2. SNS topic + email subscription
-aws sns create-topic --name pricewatch-alerts --region ap-southeast-2
-aws sns subscribe --topic-arn <topic-arn> --protocol email --notification-endpoint you@example.com --region ap-southeast-2
-
-# 3. IAM role
-aws iam create-role --role-name pricewatch-lambda-role --assume-role-policy-document file://trust-policy.json
-aws iam put-role-policy --role-name pricewatch-lambda-role --policy-name pricewatch-permissions --policy-document file://permissions-policy.json
-
-# 4. Lambda function
-aws lambda create-function --function-name pricewatch-fetcher --runtime python3.12 \
-  --role <role-arn> --handler lambda_function.lambda_handler \
-  --zip-file fileb://lambda/pricewatch.zip --timeout 30 --region ap-southeast-2 \
-  --environment file://environment.json
-
-# 5. Versioning + alias
-aws lambda publish-version --function-name pricewatch-fetcher --region ap-southeast-2
-aws lambda create-alias --function-name pricewatch-fetcher --name prod --function-version 1 --region ap-southeast-2
-
-# 6. EventBridge schedule
-aws events put-rule --name pricewatch-schedule --schedule-expression "rate(15 minutes)" --region ap-southeast-2
-aws lambda add-permission --function-name pricewatch-fetcher --qualifier prod \
-  --statement-id pricewatch-eventbridge-prod --action lambda:InvokeFunction \
-  --principal events.amazonaws.com --source-arn <rule-arn> --region ap-southeast-2
-aws events put-targets --rule pricewatch-schedule --targets file://targets.json --region ap-southeast-2
-```
-
----
-
-## 9. Testing & verification
-
-- **Manual invoke:** `aws lambda invoke --function-name pricewatch-fetcher --region ap-southeast-2 response.json` — runs the function on demand and writes the result to `response.json`.
-- **Data check:** `aws dynamodb scan --table-name crypto-prices --region ap-southeast-2` — confirms rows are actually being written, with fresh timestamps appearing every 15 minutes once the schedule is live.
-- **Alert check:** lowering `PRICE_THRESHOLD_USD` to a value below the current price (e.g. `1`) and redeploying triggers an immediate email through SNS — a quick way to prove the alerting path works end to end.
-
----
-
-## 10. Cost
-
-This project is designed to run effectively for free:
-- DynamoDB (`PAY_PER_REQUEST`) — negligible at this read/write volume
-- Lambda — well within the 1M free monthly invocations (96 invocations/day at a 15-minute schedule)
-- SNS — well within the permanent free tier of 1,000 email notifications/month
-- EventBridge — scheduled rules have no additional charge at this scale
-
-## 11. Possible future improvements
-
-- Add an **SQS dead-letter queue** so failed records are queryable later, not just logged in an alert email
-- Add a **CloudWatch Alarm** on Lambda error rate, separate from the application-level SNS alerts
-- Move from manual AWS CLI setup to **Infrastructure as Code** (AWS SAM or Terraform) for one-command, reproducible environment creation
-- Replace `deploy.bat` with a **GitHub Actions** workflow, so pushing to `main` deploys automatically
-- Add **unit tests** for `transform.py` using `pytest`, with AWS calls mocked via `moto`
-- Track more coins, and add a small dashboard (e.g. QuickSight or a simple web page) to visualize price history from DynamoDB
+- Add an **Amazon SQS dead-letter queue** to capture and replay failed records instead of just alerting on them.
+- Add a dedicated **CloudWatch Alarm** on the Lambda error rate, separate from application-level SNS alerts.
+- Move from manual AWS CLI setup to **Infrastructure as Code** (AWS SAM or Terraform) for one-command, reproducible environment creation.
+- Add **unit tests** for `transform.py` using `pytest`, with AWS calls mocked via `moto`.
+- Track additional coins and add a lightweight dashboard to visualize price history from DynamoDB.
 
 ---
 
 ## Author
 
-Built by Ankit Vishwakarma as a hands-on project to practice serverless architecture, event-driven design, and safe CI/CD deployment patterns on AWS.
+**Ankit Vishwakarma**
+
+- GitHub: https://github.com/AnkitVishwakarma4591
+
+If you found this project helpful, consider giving it a ⭐ on GitHub.
